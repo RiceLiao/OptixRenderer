@@ -34,13 +34,13 @@ if(GLUT_FOUND AND OPENGL_FOUND)
 
     OPTIX_add_sample_executable( GpuPathTracer
         GpuPathTracer.cpp
-        
 
         # These files are common among multiple samples
-        constantbg.cu
         pinhole_camera.cu
+        brdf_helper.cu
         common.h
         helpers.h
+        random.h
         )
 else()
     # GLUT or OpenGL not found

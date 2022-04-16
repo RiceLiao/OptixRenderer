@@ -86,6 +86,8 @@ sutil::Arcball arcball;
 int2           mouse_prev_pos;
 int            mouse_button;
 
+// Pathtracing
+int            max_depth = 8;
 
 //------------------------------------------------------------------------------
 //
@@ -176,6 +178,7 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     }
 
     context["scene_epsilon"]->setFloat(1.e-4f);
+    context["max_depth"]->setUint(max_depth);
 
     Buffer buffer = sutil::createOutputBuffer(context, RT_FORMAT_UNSIGNED_BYTE4, width, height, use_pbo);
     context["output_buffer"]->set(buffer);
@@ -190,9 +193,16 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     context->setExceptionProgram(0, exception_program);
     context["bad_color"]->setFloat(1.0f, 0.0f, 1.0f);
 
+    //// Miss program
+    //context->setMissProgram(0, context->createProgramFromPTXString(sutil::getPtxString(SAMPLE_NAME, "constantbg.cu"), "miss"));
+    //context["bg_color"]->setFloat(0.34f, 0.55f, 0.85f);
+    context["bg_color"]->setFloat(0.6f, 0.6f, 0.6f);
+
     // Miss program
-    context->setMissProgram(0, context->createProgramFromPTXString(sutil::getPtxString(SAMPLE_NAME, "constantbg.cu"), "miss"));
-    context["bg_color"]->setFloat(0.34f, 0.55f, 0.85f);
+    const float3 default_color = make_float3(1000.0f, 0.0f, 0.0f);
+    const std::string texpath = std::string(sutil::samplesDir()) + "/scenes/envmaps/001.hdr";
+    context["envmap"]->setTextureSampler(sutil::loadTexture(context, texpath, default_color));
+    context->setMissProgram(0, context->createProgramFromPTXString(ptx, "envmap_miss"));
 }
 
 void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions)
@@ -201,8 +211,12 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
     geometry_group = context->createGeometryGroup();
     geometry_group->setAcceleration(context->createAcceleration("Trbvh"));
 
+    // Setup closest and any hit programs for our meshes
+    const char* ptx = sutil::getPtxString(SAMPLE_NAME, "pinhole_camera.cu");
+    Program any_hit = context->createProgramFromPTXString(ptx, "shadow");
+    Program closest_hit = context->createProgramFromPTXString(ptx, "closest_hit_li");
 
-    //// Setup closest and any hit programs for our meshes
+    // Setup closest and any hit programs for our meshes
     //const char* ptx = sutil::getPtxString(SAMPLE_NAME, "pathtracer.cu");
     //const char* ptx2 = sutil::getPtxString(SAMPLE_NAME, "triangle_mesh.cu");
     //Program closest_hit = context->createProgramFromPTXString(ptx, "closest_hit_li");
@@ -222,11 +236,10 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
 
 
         // Change default programs
-        //omesh.closest_hit = closest_hit;
-        //omesh.any_hit = any_hit;
+        mesh.closest_hit = closest_hit;
+        mesh.any_hit = any_hit;
         //omesh.bounds = bounds;
         //omesh.intersection = intersection;
-
 
         // Optix loads our mesh
         loadMesh(filenames[i], mesh, Matrix4x4::translate(positions[i]));
@@ -235,7 +248,6 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
         // Add to BVH
         aabb.include(mesh.bbox_min, mesh.bbox_max);
         geometry_group->addChild(mesh.geom_instance);
-        std::cerr << "done \n";
     }
 
     context["top_object"]->set(geometry_group);
@@ -261,13 +273,9 @@ void setupLights()
     const float max_dim = fmaxf(aabb.extent(0), aabb.extent(1)); // max of x, y components
 
     BasicLight lights[] = {
-        { make_float3(-0.5f,  0.25f, -1.0f), make_float3(0.2f, 0.2f, 0.25f), 0, 0 },
-        { make_float3(-0.5f,  0.0f ,  1.0f), make_float3(0.1f, 0.1f, 0.10f), 0, 0 },
-        { make_float3(0.5f,  0.5f ,  0.5f), make_float3(0.7f, 0.7f, 0.65f), 1, 0 }
+        { make_float3(0.5f,  0.5f ,  0.5f), make_float3(0.7f, 0.7f, 0.65f), 1, 200000.0f }
     };
-    lights[0].pos *= max_dim * 10.0f;
-    lights[1].pos *= max_dim * 10.0f;
-    lights[2].pos *= max_dim * 10.0f;
+    lights[0].pos *= max_dim;
 
     Buffer light_buffer = context->createBuffer(RT_BUFFER_INPUT);
     light_buffer->setFormat(RT_FORMAT_USER);

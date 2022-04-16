@@ -31,6 +31,7 @@
 // Common optix::Ray types
 #define RADIANCE_RAY_TYPE 0
 #define SHADOW_RAY_TYPE 1
+#define M_PI 3.14159265359f
 
 #include <optixu/optixu_vector_types.h>
 
@@ -42,7 +43,7 @@ struct BasicLight
   float3 pos;
   float3 color;
   int    casts_shadow; 
-  int    padding;      // make this structure 32 bytes -- powers of two are your friend!
+  float intensity_multiplier;
 };
 
 
