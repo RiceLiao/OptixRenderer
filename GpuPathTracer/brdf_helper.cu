@@ -33,6 +33,14 @@ rtDeclareVariable(int, Kd_mapped, , );	    // Has textures
 //						BRDF Evaluation
 // 
 //////////////////////////////// //////////////////////////////// 
+RT_CALLABLE_PROGRAM float3 perpendicular(const float3& v)
+{
+	if (fabsf(v.x) < fabsf(v.y))
+	{
+		return make_float3(0.0f, -v.z, v.y);
+	}
+	return make_float3(-v.z, 0.0f, v.x);
+}
 
 RT_CALLABLE_PROGRAM float3 diffuse_f(float3 wi, float3 wo, float3 n)
 {
@@ -59,7 +67,7 @@ RT_CALLABLE_PROGRAM float3 blinnphong_f(float3 wi, float3 wo, float3 n)
 	float3 wh = normalize(wi + wo);
 	float F = Ps + ((1.0f - Ps) * powf(1.0f - abs(dot(wh, wi)), 5.0f));
 	float s = Pr;
-	float D = (s + 2) / (2 * M_PI) * powf(dot(n, wh), s);
+	float D = (s + 2) / (2 * M_PIf) * powf(dot(n, wh), s);
 	float m1 = 2 * dot(n, wh) * dot(n, wo) / dot(wo, wh);
 	float m2 = 2 * dot(n, wh) * dot(n, wi) / dot(wo, wh);
 	float G = min(1.0f, min(m1, m2));
@@ -82,7 +90,7 @@ RT_CALLABLE_PROGRAM float3 blinnphongmetal_f(float3 wi, float3 wo, float3 n)
 	float3 wh = normalize(wi + wo);
 	float F = Ps + ((1.0f - Ps) * powf(1.0f - abs(dot(wh, wi)), 5.0f));
 	float s = Pr;
-	float D = (s + 2) / (2 * M_PI) * powf(dot(n, wh), s);
+	float D = (s + 2) / (2 * M_PIf) * powf(dot(n, wh), s);
 	float m1 = 2 * dot(n, wh) * dot(n, wo) / dot(wo, wh);
 	float m2 = 2 * dot(n, wh) * dot(n, wi) / dot(wo, wh);
 	float G = min(1.0f, min(m1, m2));
@@ -146,13 +154,10 @@ RT_CALLABLE_PROGRAM float3 linearblend_reflectivity_f(float3 wi, float3 wo, floa
 //////////////////////////////// //////////////////////////////// 
 
 
-// Samples a new wi direction for pathtracing and returns a simple diffuse brdf
 RT_CALLABLE_PROGRAM float3 diffuse_samplewi(unsigned int seed, float3& wi, const float3& wo, const float3& n, float& p)
 {
-	float3 tangent;
-	float3 bitangent;
-
-	create_onb(n, tangent, bitangent);
+	float3 tangent = normalize(perpendicular(n));;
+	float3 bitangent = normalize(cross(tangent, n));
 
 	float z1 = rnd(seed);
 	float z2 = rnd(seed);
@@ -167,22 +172,24 @@ RT_CALLABLE_PROGRAM float3 diffuse_samplewi(unsigned int seed, float3& wi, const
 	return diffuse_f(wi, wo, n);
 }
 
-// Samples a new wi direction for pathtracing and returns a simple blinnphong brdf
 RT_CALLABLE_PROGRAM float3 blinnphong_samplewi(unsigned int seed, float3& wi, const float3& wo, const float3& n, float& p)
 {
-	float pdf;
-	float bdf_val;
-	float3 tangent;
-	float3 bitangent;
+	float3 tangent = normalize(perpendicular(n));;
+	float3 bitangent = normalize(cross(tangent, n));
 
-	// Importance sample
-	create_onb(n, tangent, bitangent);
-	float2 sample = make_float2(rnd(seed), rnd(seed));
-
-	float3 wh = sample_phong_lobe(sample, Pr, tangent, bitangent, n);
+	//create_onb(n, tangent, bitangent);
+	float phi = 2.0f * M_PIf * rnd(seed);
+	float cos_theta = pow(rnd(seed), 1.0f / (Pr + 1));
+	float sin_theta = sqrt(max(0.0f, 1.0f - cos_theta * cos_theta));
+	float3 wh = normalize(sin_theta * cos(phi) * tangent + sin_theta * sin(phi) * bitangent + cos_theta * n);
 
 	if (dot(wo, n) <= 0.0f)
 		return make_float3(0.0f);
+
+	wi = normalize(2 * dot(wh, wo) * wh - wo);
+	float pwh = (Pr + 1) * pow(dot(n, wh), Pr) / (2 * M_PIf);
+	p = pwh / (4 * dot(wo, wh));
+	p = p * 0.5f;
 
 	if (rnd(seed) < 0.5f)
 	{
@@ -196,13 +203,11 @@ RT_CALLABLE_PROGRAM float3 blinnphong_samplewi(unsigned int seed, float3& wi, co
 	}
 }
 
-// Samples a new wi direction for pathtracing and returns a simple blinnphong brdf
 RT_CALLABLE_PROGRAM float3 blinnphongmetal_samplewi(unsigned int seed, float3& wi, const float3& wo, const float3& n, float& p)
 {
 	return blinnphong_samplewi(seed, wi, wo, n, p);
 }
 
-// Samples a new wi direction for pathtracing and returns a brdf linearly blended between reflectivity and metalness
 RT_CALLABLE_PROGRAM float3 linearblend_samplewi(unsigned int seed, float3& wi, const float3& wo, const float3& n, float& p)
 {
 	p = 0.0f;

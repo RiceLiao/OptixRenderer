@@ -107,12 +107,10 @@ RT_PROGRAM void pinhole_camera()
 RT_PROGRAM void exception()
 {
   rtPrintExceptionDetails();
-  output_buffer[launch_index] = make_color( bad_color );
+  output_buffer[launch_index] = make_color(bad_color);
 }
 
 rtTextureSampler<float4, 2> envmap;
-rtDeclareVariable(float3, bg_color, , );
-
 RT_PROGRAM void envmap_miss()
 {
 	float theta = atan2f(ray.direction.x, ray.direction.z);
@@ -120,7 +118,6 @@ RT_PROGRAM void envmap_miss()
 	float u = (theta + M_PIf) * (0.5f * M_1_PIf);
 	float v = 0.5f * (1.0f + sin(phi));
     prd_radiance.result = make_float3(tex2D(envmap, u, v)) * prd_radiance.importance;
-    //prd_radiance.result = bg_color;
 }
 
 RT_PROGRAM void closest_hit_li()
@@ -144,17 +141,18 @@ RT_PROGRAM void closest_hit_li()
         rtTrace(top_shadower, shadow_ray, shadow_prd);
         float3 light_visibility = shadow_prd.visibility;
         float3 wi = normalize(light.pos - hit_point);
+
         //direct lighting
         if (fmaxf(light_visibility) > 0.0f) {
             float falloff_factor = 1.0f / (Ldist * Ldist);
             float3 Li = light.intensity_multiplier * falloff_factor * light.color;
             color += prd_radiance.importance * Li * linearblend_reflectivity_f(wi, -ray.direction, ffnormal) * max(0.0f, dot(wi, ffnormal));
         }
+        
         //emissive lighting
         color += prd_radiance.importance * Ke * Kd;
-        //color += Ke;
-        //color += make_float3(Pr);
 
+        //indirect lighting
         float pdf = 1.0f;
         wi = make_float3(0.0f);
         float3 brdf = linearblend_samplewi(prd_radiance.seed, wi, -ray.direction, ffnormal, pdf);
@@ -170,26 +168,29 @@ RT_PROGRAM void closest_hit_li()
             prd_radiance.result = color;
             return;
         }
+            
         Ray reflection_ray;
         if (prd_radiance.depth < max_depth) {
-            if (dot(wi, world_geo_normal) < 0) {
-                reflection_ray = make_Ray(hit_point - scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
-            }
-            else {
-                reflection_ray = make_Ray(hit_point + scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
-            }
+            //if (dot(wi, world_geo_normal) < 0) {
+            //    reflection_ray = make_Ray(hit_point - scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+            //}
+            //else {
+            //    reflection_ray = make_Ray(hit_point + scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+            //}
+            float3 R = reflect(ray.direction, ffnormal);//TODO
+            reflection_ray = make_Ray(hit_point, R, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
 
             PerRayData_radiance reflection_prd;
             reflection_prd.importance = importance;
-            reflection_prd.result = color;
+            //reflection_prd.result = color;
             reflection_prd.depth = prd_radiance.depth + 1;
             reflection_prd.seed = prd_radiance.seed;
-
             rtTrace(top_object, reflection_ray, reflection_prd);
             color += reflection_prd.result;
         }
 
     }
+
     prd_radiance.result = color;
 }
 

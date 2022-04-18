@@ -31,7 +31,6 @@
 // Common optix::Ray types
 #define RADIANCE_RAY_TYPE 0
 #define SHADOW_RAY_TYPE 1
-#define M_PI 3.14159265359f
 
 #include <optixu/optixu_vector_types.h>
 

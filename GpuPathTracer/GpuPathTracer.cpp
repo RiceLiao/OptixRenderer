@@ -43,6 +43,7 @@
 #    include <GL/glut.h>
 #  endif
 #endif
+#define USE_DEBUG_EXCEPTIONS true
 
 #include <optixu/optixpp_namespace.h>
 #include <optixu/optixu_math_stream_namespace.h>
@@ -87,7 +88,7 @@ int2           mouse_prev_pos;
 int            mouse_button;
 
 // Pathtracing
-int            max_depth = 8;
+int            max_depth = 3;
 int            frame_number = 1;
 
 //------------------------------------------------------------------------------
@@ -204,6 +205,13 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     const std::string texpath = std::string(sutil::samplesDir()) + "/scenes/envmaps/001.hdr";
     context["envmap"]->setTextureSampler(sutil::loadTexture(context, texpath, default_color));
     context->setMissProgram(0, context->createProgramFromPTXString(ptx, "envmap_miss"));
+
+#if USE_DEBUG_EXCEPTIONS
+    context->setPrintEnabled(true);
+    context->setPrintBufferSize(4096);
+    context->setPrintLaunchIndex(width, height);
+    context->setExceptionEnabled(RT_EXCEPTION_ALL, true);
+#endif
 }
 
 void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions)
@@ -526,7 +534,6 @@ int main(int argc, char** argv)
         setupLights();
 
         context->validate();
-
         if (out_file.empty())
         {
             glutRun();
