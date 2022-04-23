@@ -173,7 +173,8 @@ RT_CALLABLE_PROGRAM float3 diffuse_samplewi(unsigned int seed, float3& wi, const
 }
 
 RT_CALLABLE_PROGRAM float3 blinnphong_samplewi(unsigned int seed, float3& wi, const float3& wo, const float3& n, float& p)
-{
+{		
+
 	float3 tangent = normalize(perpendicular(n));;
 	float3 bitangent = normalize(cross(tangent, n));
 

@@ -655,7 +655,7 @@ void LoadMtl(std::map<std::string, int> &material_map,
     }
 
     // shininess
-    if (token[0] == 'N' && token[1] == 's' && isSpace(token[2])) {
+    if (token[0] == 'P' && token[1] == 'r' && isSpace(token[2])) {
       token += 2;
       material.shininess = parseFloat(token);
       continue;

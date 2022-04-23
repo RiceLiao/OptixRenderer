@@ -178,7 +178,7 @@ RT_PROGRAM void closest_hit_li()
             //    reflection_ray = make_Ray(hit_point + scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
             //}
             float3 R = reflect(ray.direction, ffnormal);//TODO
-            reflection_ray = make_Ray(hit_point, R, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+            reflection_ray = make_Ray(hit_point, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
 
             PerRayData_radiance reflection_prd;
             reflection_prd.importance = importance;
