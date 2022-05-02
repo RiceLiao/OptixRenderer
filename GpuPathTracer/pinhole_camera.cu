@@ -37,8 +37,10 @@ using namespace optix;
 
 struct PerRayData_radiance
 {
-  float3 result;
+  float3  result;
   float3  importance;
+  float3  albedo;
+  float3  normal;
   int    depth;
   unsigned int seed;
 };
@@ -54,9 +56,13 @@ rtDeclareVariable(float3,        V, , );
 rtDeclareVariable(float3,        W, , );
 rtDeclareVariable(float3,        bad_color, , );
 rtDeclareVariable(float,         scene_epsilon, , );
-rtBuffer<uchar4, 2>              output_buffer;
-rtDeclareVariable(rtObject,      top_object, , );
+rtDeclareVariable(Matrix3x3, normal_matrix, , );//TODO:
 
+rtBuffer<float4, 2>              output_buffer;
+rtBuffer<float4, 2>              input_albedo_buffer;
+rtBuffer<float4, 2>              input_normal_buffer;
+
+rtDeclareVariable(rtObject, top_object, , );
 rtDeclareVariable(uint2, launch_index, rtLaunchIndex, );
 rtDeclareVariable(uint2, launch_dim,   rtLaunchDim, );
 rtDeclareVariable(float, time_view_scale, , ) = 1e-6f;
@@ -82,32 +88,79 @@ RT_PROGRAM void pinhole_camera()
   //TODO: might have issue
   const size_t2 screen = output_buffer.size();
   unsigned int seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
-  //const float jitter_x = rnd(seed);
-  //const float jitter_y = rnd(seed);
-  //const float2 jitter = make_float2(jitter_x, jitter_y);
-  float2 d = make_float2(launch_index) / make_float2(launch_dim) * 2.f - 1.f;
-  //const float2 d = (make_float2(launch_index) + jitter) / make_float2(launch_dim) * 2.f - 1.f;
+  const float jitter_x = rnd(seed);
+  const float jitter_y = rnd(seed);
+  const float2 jitter = make_float2(jitter_x, jitter_y);
+  //float2 d = make_float2(launch_index) / make_float2(launch_dim) * 2.f - 1.f;
+  const float2 d = (make_float2(launch_index) + jitter) / make_float2(launch_dim) * 2.f - 1.f;
 
   float3 ray_origin = eye;
-  float3 ray_direction = normalize(d.x*U + d.y*V + W);
-  //float3 ray_direction = normalize(d.x * U + d.y * V + W);
+  //float3 ray_direction = normalize(d.x*U + d.y*V + W);
+  float3 ray_direction = normalize(d.x * U + d.y * V + W);
   
-  optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  //Naive
+  //optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  //PerRayData_radiance prd;
+  //prd.importance = make_float3(1.0f);
+  //prd.depth = 0;
+  //prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
+  //rtTrace(top_object, ray, prd ) ;
+  //output_buffer[launch_index] = make_float4(prd.result);
 
+  //Multisampling
+  //float3 result = make_float3(0.0f);
+  //int number_of_samples = 8;
+  //for (int i = 0; i < number_of_samples; i++)
+  //{
+  //    optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  //    PerRayData_radiance prd;
+  //    prd.importance = make_float3(1.0f);
+  //    prd.depth = 0;
+  //    prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1 + i);
+  //    rtTrace(top_object, ray, prd);
+  //    result = result + prd.result;
+  //}
+  //result = result / number_of_samples;
+  //output_buffer[launch_index] = make_float4(result);
+
+  optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
   PerRayData_radiance prd;
   prd.importance = make_float3(1.0f);
   prd.depth = 0;
   prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
-
   rtTrace(top_object, ray, prd ) ;
-  output_buffer[launch_index] = make_color(prd.result);
+
+  float3 result = prd.result;
+  float3 albedo = prd.albedo;
+  float3 normal = (length(prd.normal) > 0.f) ? normalize(normal_matrix * prd.normal) : make_float3(0., 0., 1.);
+  
+  if (frame_number > 1)
+  {
+      float a = 1.0f / (float)frame_number;
+      float3 old_result = make_float3(output_buffer[launch_index]);
+      float3 old_albedo = make_float3(input_albedo_buffer[launch_index]);
+      float3 old_normal = make_float3(input_normal_buffer[launch_index]);
+      output_buffer[launch_index] = make_float4(lerp(old_result, result, a));
+      input_albedo_buffer[launch_index] = make_float4(lerp(old_albedo, albedo, a), 1.0f);
+
+      float3 accum_normal = lerp(old_normal, normal, a);
+      input_normal_buffer[launch_index] = make_float4((length(accum_normal) > 0.f) ? normalize(accum_normal) : normal, 1.0f);
+  }
+  else
+  {
+      output_buffer[launch_index] = make_float4(result);
+      input_albedo_buffer[launch_index] = make_float4(albedo, 1.0f);
+      input_normal_buffer[launch_index] = make_float4(normal, 1.0f);
+  }
+  output_buffer[launch_index] = make_float4(prd.result);
 }
 
 
 RT_PROGRAM void exception()
 {
   rtPrintExceptionDetails();
-  output_buffer[launch_index] = make_color(bad_color);
+  output_buffer[launch_index] = make_float4(bad_color);
+  //output_buffer[launch_index] = make_color(bad_color);
 }
 
 rtTextureSampler<float4, 2> envmap;
@@ -118,6 +171,12 @@ RT_PROGRAM void envmap_miss()
 	float u = (theta + M_PIf) * (0.5f * M_1_PIf);
 	float v = 0.5f * (1.0f + sin(phi));
     prd_radiance.result = make_float3(tex2D(envmap, u, v)) * prd_radiance.importance;
+
+    if (prd_radiance.depth == 0)
+    {
+        prd_radiance.albedo = make_float3(0.0f);
+        prd_radiance.normal = make_float3(0.0f);
+    }
 }
 
 RT_PROGRAM void closest_hit_li()
@@ -126,7 +185,6 @@ RT_PROGRAM void closest_hit_li()
     float3 world_shade_normal = normalize(rtTransformNormal(RT_OBJECT_TO_WORLD, shading_normal));
     float3 ffnormal = faceforward(world_shade_normal, -ray.direction, world_geo_normal);
     float3 color = make_float3(0.0f);
-
     float3 hit_point = ray.origin + t_hit * ray.direction;
 
     for (int i = 0; i < lights.size(); ++i) {
@@ -135,7 +193,7 @@ RT_PROGRAM void closest_hit_li()
 
         //shadow ray
         PerRayData_shadow shadow_prd;
-        shadow_prd.visibility = make_float3(1.0f); 
+        shadow_prd.visibility = make_float3(1.0f);
         float Ldist = length(light.pos - hit_point);
         optix::Ray shadow_ray(hit_point, L, SHADOW_RAY_TYPE, scene_epsilon, Ldist);
         rtTrace(top_shadower, shadow_ray, shadow_prd);
@@ -168,21 +226,20 @@ RT_PROGRAM void closest_hit_li()
             prd_radiance.result = color;
             return;
         }
+
+        if (prd_radiance.depth == 0)
+        {
+            prd_radiance.albedo = Kd;
+            prd_radiance.normal = ffnormal;
+        }
             
-        Ray reflection_ray;
         if (prd_radiance.depth < max_depth) {
-            //if (dot(wi, world_geo_normal) < 0) {
-            //    reflection_ray = make_Ray(hit_point - scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
-            //}
-            //else {
-            //    reflection_ray = make_Ray(hit_point + scene_epsilon * world_geo_normal, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
-            //}
-            float3 R = reflect(ray.direction, ffnormal);//TODO
-            reflection_ray = make_Ray(hit_point, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+            //float3 R = reflect(ray.direction, ffnormal);//TODO
+            Ray reflection_ray = make_Ray(hit_point, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
 
             PerRayData_radiance reflection_prd;
             reflection_prd.importance = importance;
-            //reflection_prd.result = color;
+            reflection_prd.result = color;
             reflection_prd.depth = prd_radiance.depth + 1;
             reflection_prd.seed = prd_radiance.seed;
             rtTrace(top_object, reflection_ray, reflection_prd);
@@ -196,6 +253,6 @@ RT_PROGRAM void closest_hit_li()
 
 RT_PROGRAM void shadow()
 {
-    prd_shadow.visibility = make_float3(0);
+    prd_shadow.visibility = make_float3(0.0f);
 	rtTerminateRay();
 }

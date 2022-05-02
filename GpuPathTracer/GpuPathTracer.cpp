@@ -44,6 +44,7 @@
 #  endif
 #endif
 #define USE_DEBUG_EXCEPTIONS true
+#define DL_DENOISER true
 
 #include <optixu/optixpp_namespace.h>
 #include <optixu/optixu_math_stream_namespace.h>
@@ -91,6 +92,16 @@ int            mouse_button;
 int            max_depth = 3;
 int            frame_number = 1;
 
+//postprocessing
+Buffer denoised_buffer;
+Buffer empty_buffer;
+Buffer training_data_buffer;
+
+PostprocessingStage denoise_stage;
+CommandList commandlist;
+bool initDenoiser = true;
+float denoise_blend = 0.0f;
+
 //------------------------------------------------------------------------------
 //
 // Forward decls 
@@ -100,6 +111,8 @@ int            frame_number = 1;
 struct UsageReportLogger;
 
 Buffer getOutputBuffer();
+Buffer getAlbedoBuffer();
+Buffer getNormalBuffer();
 void destroyContext();
 void registerExitHandler();
 void createContext(int usage_report_level, UsageReportLogger* logger);
@@ -126,6 +139,14 @@ void glutResize(int w, int h);
 Buffer getOutputBuffer()
 {
     return context["output_buffer"]->getBuffer();
+}
+Buffer getAlbedoBuffer()
+{
+    return context["input_albedo_buffer"]->getBuffer();
+}
+Buffer getNormalBuffer()
+{
+    return context["input_normal_buffer"]->getBuffer();
 }
 
 
@@ -182,8 +203,20 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     context["scene_epsilon"]->setFloat(1.e-4f);
     context["max_depth"]->setUint(max_depth);
 
-    Buffer buffer = sutil::createOutputBuffer(context, RT_FORMAT_UNSIGNED_BYTE4, width, height, use_pbo);
+    Buffer buffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
     context["output_buffer"]->set(buffer);
+    denoised_buffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
+    context["denoised_buffer"]->set(denoised_buffer);
+
+#if DL_DENOISER
+    //TODO: not sure whether it's useful
+    empty_buffer = context->createBuffer(RT_BUFFER_OUTPUT, RT_FORMAT_FLOAT4, 0, 0); 
+    training_data_buffer = context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_BYTE, 0);
+    Buffer albedo_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
+    context["input_albedo_buffer"]->set(albedo_buffer);
+    Buffer normal_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
+    context["input_normal_buffer"]->set(normal_buffer);
+#endif
 
     // Ray generation program
     const char* ptx = sutil::getPtxString(SAMPLE_NAME, "pinhole_camera.cu");
@@ -194,11 +227,6 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     Program exception_program = context->createProgramFromPTXString(ptx, "exception");
     context->setExceptionProgram(0, exception_program);
     context["bad_color"]->setFloat(1.0f, 0.0f, 1.0f);
-
-    //// Miss program
-    //context->setMissProgram(0, context->createProgramFromPTXString(sutil::getPtxString(SAMPLE_NAME, "constantbg.cu"), "miss"));
-    //context["bg_color"]->setFloat(0.34f, 0.55f, 0.85f);
-    context["bg_color"]->setFloat(0.6f, 0.6f, 0.6f);
 
     // Miss program
     const float3 default_color = make_float3(1000.0f, 0.0f, 0.0f);
@@ -269,7 +297,8 @@ void setupCamera()
 {
     const float max_dim = fmaxf(aabb.extent(0), aabb.extent(1)); // max of x, y components
 
-    camera_eye = aabb.center() + make_float3(0.0f, 0.0f, max_dim * 1.5f);
+    //camera_eye = aabb.center() + make_float3(-40.0f, 25.0f, max_dim * 1.5f);
+    camera_eye = make_float3(-60.0f, 80.0f, 60.0f);
     camera_lookat = aabb.center();
     camera_up = make_float3(0.0f, 1.0f, 0.0f);
 
@@ -332,6 +361,14 @@ void updateCamera()
     context["U"]->setFloat(camera_u);
     context["V"]->setFloat(camera_v);
     context["W"]->setFloat(camera_w);
+
+    const Matrix4x4 current_frame_inv = Matrix4x4::fromBasis(
+        normalize(camera_u),
+        normalize(camera_v),
+        normalize(-camera_w),
+        camera_lookat).inverse();
+    Matrix3x3 normal_matrix = make_matrix3x3(current_frame_inv);
+    context["normal_matrix"]->setMatrix3x3fv(false, normal_matrix.getData());
 }
 
 
@@ -374,6 +411,27 @@ void glutRun()
     glutMainLoop();
 }
 
+void setupDenoiser()
+{
+    denoise_stage = context->createBuiltinPostProcessingStage("DLDenoiser");
+    if (training_data_buffer)
+    {
+        Variable training_buff = denoise_stage->declareVariable("training_data_buffer");
+        training_buff->set(training_data_buffer);
+    }
+    denoise_stage->declareVariable("input_buffer")->set(getOutputBuffer());
+    denoise_stage->declareVariable("output_buffer")->set(denoised_buffer);
+    denoise_stage->declareVariable("hdr")->setUint(0);
+    denoise_stage->declareVariable("blend")->setFloat(denoise_blend);
+    denoise_stage->declareVariable("input_albedo_buffer");
+    denoise_stage->declareVariable("input_normal_buffer");
+    commandlist = context->createCommandList();
+    commandlist->appendLaunch(0, width, height);
+    commandlist->appendPostprocessingStage(denoise_stage, width, height);
+    commandlist->finalize();
+
+    initDenoiser = false;
+}
 
 //------------------------------------------------------------------------------
 //
@@ -386,7 +444,17 @@ void glutDisplay()
     updateCamera();
     context->launch(0, width, height);
 
+#if DL_DENOISER
+    if (initDenoiser)
+    {
+        setupDenoiser();
+    }
+    Variable(denoise_stage->queryVariable("blend"))->setFloat(denoise_blend);
+    commandlist->execute();
+    sutil::displayBufferGL(denoised_buffer);
+#else
     sutil::displayBufferGL(getOutputBuffer());
+#endif
 
     {
         static unsigned frame_count = 0;
@@ -471,6 +539,8 @@ void glutResize(int w, int h)
     sutil::ensureMinimumSize(width, height);
 
     sutil::resizeBuffer(getOutputBuffer(), width, height);
+    sutil::resizeBuffer(getAlbedoBuffer(), width, height);
+    sutil::resizeBuffer(getNormalBuffer(), width, height);
 
     glViewport(0, 0, width, height);
 
