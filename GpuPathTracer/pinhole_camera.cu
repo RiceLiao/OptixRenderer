@@ -61,6 +61,7 @@ rtDeclareVariable(Matrix3x3, normal_matrix, , );//TODO:
 rtBuffer<float4, 2>              output_buffer;
 rtBuffer<float4, 2>              input_albedo_buffer;
 rtBuffer<float4, 2>              input_normal_buffer;
+rtBuffer<float4, 2>              accum_buffer;
 
 rtDeclareVariable(rtObject, top_object, , );
 rtDeclareVariable(uint2, launch_index, rtLaunchIndex, );
@@ -95,21 +96,69 @@ RT_PROGRAM void pinhole_camera()
   const float2 d = (make_float2(launch_index) + jitter) / make_float2(launch_dim) * 2.f - 1.f;
 
   float3 ray_origin = eye;
-  //float3 ray_direction = normalize(d.x*U + d.y*V + W);
   float3 ray_direction = normalize(d.x * U + d.y * V + W);
   
   //Naive
+  optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  PerRayData_radiance prd;
+  prd.importance = make_float3(1.0f);
+  prd.depth = 0;
+  prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
+  rtTrace(top_object, ray, prd ) ;
+  output_buffer[launch_index] = make_float4(prd.result);
+  if (prd.result.x > 1.0f || prd.result.y > 1.0f || prd.result.z > 1.0f)
+  {
+      output_buffer[launch_index] = make_float4(1.0f);
+  }
+
+  //Accumulate
   //optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
   //PerRayData_radiance prd;
   //prd.importance = make_float3(1.0f);
   //prd.depth = 0;
   //prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
-  //rtTrace(top_object, ray, prd ) ;
-  //output_buffer[launch_index] = make_float4(prd.result);
+  //rtTrace(top_object, ray, prd);
+  //float4 accum_result = make_float4(0.0f);
+  //if (frame_number == 1) {
+  //    accum_result = make_float4(prd.result);
+  //} else {
+  //    accum_result = accum_buffer[launch_index] + make_float4(prd.result);
+  //}
+  //accum_buffer[launch_index] = accum_result;
+  //output_buffer[launch_index] = accum_result/frame_number;
+
+  //optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  //PerRayData_radiance prd;
+  //prd.importance = make_float3(1.0f);
+  //prd.depth = 0;
+  //prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
+  //rtTrace(top_object, ray, prd);
+  //float4 accum_result = make_float4(0.0f);
+  //float4 result = make_float4(prd.result);
+  ////replace the abnormal value
+  //float X = prd.result.x + prd.result.y + prd.result.z;
+  //float S = sqrtf((prd.result.x - accum_buffer[launch_index].x) * (prd.result.x - accum_buffer[launch_index].x) +
+  //    (prd.result.y - accum_buffer[launch_index].y) * (prd.result.y - accum_buffer[launch_index].y) +
+  //    (prd.result.z - accum_buffer[launch_index].z) * (prd.result.z - accum_buffer[launch_index].z));
+  //float TL = 0.3f;
+  //float P1 = S / sqrtf(frame_number) * TL;
+  //float P2 = (accum_buffer[launch_index].x + accum_buffer[launch_index].y + accum_buffer[launch_index].z) / frame_number;
+  //if (X < -P1 + P2 || X > P1 + P2)
+  //{
+  //    result = accum_buffer[launch_index] / frame_number;
+  //}
+  ////accumulate value
+  //if (frame_number == 1) {
+  //    accum_result = make_float4(prd.result);
+  //} else {
+  //    accum_result = accum_buffer[launch_index] + result;
+  //}
+  //accum_buffer[launch_index] = accum_result;
+  //output_buffer[launch_index] = accum_result/frame_number;
 
   //Multisampling
   //float3 result = make_float3(0.0f);
-  //int number_of_samples = 8;
+  //int number_of_samples = 1;
   //for (int i = 0; i < number_of_samples; i++)
   //{
   //    optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
@@ -123,36 +172,36 @@ RT_PROGRAM void pinhole_camera()
   //result = result / number_of_samples;
   //output_buffer[launch_index] = make_float4(result);
 
-  optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
-  PerRayData_radiance prd;
-  prd.importance = make_float3(1.0f);
-  prd.depth = 0;
-  prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
-  rtTrace(top_object, ray, prd ) ;
-
-  float3 result = prd.result;
-  float3 albedo = prd.albedo;
-  float3 normal = (length(prd.normal) > 0.f) ? normalize(normal_matrix * prd.normal) : make_float3(0., 0., 1.);
-  
-  if (frame_number > 1)
-  {
-      float a = 1.0f / (float)frame_number;
-      float3 old_result = make_float3(output_buffer[launch_index]);
-      float3 old_albedo = make_float3(input_albedo_buffer[launch_index]);
-      float3 old_normal = make_float3(input_normal_buffer[launch_index]);
-      output_buffer[launch_index] = make_float4(lerp(old_result, result, a));
-      input_albedo_buffer[launch_index] = make_float4(lerp(old_albedo, albedo, a), 1.0f);
-
-      float3 accum_normal = lerp(old_normal, normal, a);
-      input_normal_buffer[launch_index] = make_float4((length(accum_normal) > 0.f) ? normalize(accum_normal) : normal, 1.0f);
-  }
-  else
-  {
-      output_buffer[launch_index] = make_float4(result);
-      input_albedo_buffer[launch_index] = make_float4(albedo, 1.0f);
-      input_normal_buffer[launch_index] = make_float4(normal, 1.0f);
-  }
-  output_buffer[launch_index] = make_float4(prd.result);
+  //optix::Ray ray = optix::make_Ray(ray_origin, ray_direction, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+  //PerRayData_radiance prd;
+  //prd.importance = make_float3(1.0f);
+  //prd.depth = 0;
+  //prd.seed = tea<16>(screen.x * launch_index.y + launch_index.x, frame_number + 1);
+  //rtTrace(top_object, ray, prd ) ;
+  //
+  //float3 result = prd.result;
+  //float3 albedo = prd.albedo;
+  //float3 normal = (length(prd.normal) > 0.f) ? normalize(normal_matrix * prd.normal) : make_float3(0., 0., 1.);
+  //
+  //if (frame_number > 1)
+  //{
+  //    float a = 1.0f / (float)frame_number;
+  //    float3 old_result = make_float3(output_buffer[launch_index]);
+  //    float3 old_albedo = make_float3(input_albedo_buffer[launch_index]);
+  //    float3 old_normal = make_float3(input_normal_buffer[launch_index]);
+  //    output_buffer[launch_index] = make_float4(lerp(old_result, result, a));
+  //    input_albedo_buffer[launch_index] = make_float4(lerp(old_albedo, albedo, a), 1.0f);
+  //
+  //    float3 accum_normal = lerp(old_normal, normal, a);
+  //    input_normal_buffer[launch_index] = make_float4((length(accum_normal) > 0.f) ? normalize(accum_normal) : normal, 1.0f);
+  //}
+  //else
+  //{
+  //    output_buffer[launch_index] = make_float4(result);
+  //    input_albedo_buffer[launch_index] = make_float4(albedo, 1.0f);
+  //    input_normal_buffer[launch_index] = make_float4(normal, 1.0f);
+  //}
+  //output_buffer[launch_index] = make_float4(prd.result);
 }
 
 
@@ -172,11 +221,11 @@ RT_PROGRAM void envmap_miss()
 	float v = 0.5f * (1.0f + sin(phi));
     prd_radiance.result = make_float3(tex2D(envmap, u, v)) * prd_radiance.importance;
 
-    if (prd_radiance.depth == 0)
-    {
-        prd_radiance.albedo = make_float3(0.0f);
-        prd_radiance.normal = make_float3(0.0f);
-    }
+    //if (prd_radiance.depth == 0)
+    //{
+    //    prd_radiance.albedo = make_float3(0.0f);
+    //    prd_radiance.normal = make_float3(0.0f);
+    //}
 }
 
 RT_PROGRAM void closest_hit_li()
@@ -186,6 +235,8 @@ RT_PROGRAM void closest_hit_li()
     float3 ffnormal = faceforward(world_shade_normal, -ray.direction, world_geo_normal);
     float3 color = make_float3(0.0f);
     float3 hit_point = ray.origin + t_hit * ray.direction;
+
+
 
     for (int i = 0; i < lights.size(); ++i) {
         BasicLight light = lights[i];
@@ -212,7 +263,6 @@ RT_PROGRAM void closest_hit_li()
 
         //indirect lighting
         float pdf = 1.0f;
-        wi = make_float3(0.0f);
         float3 brdf = linearblend_samplewi(prd_radiance.seed, wi, -ray.direction, ffnormal, pdf);
         float cosine_term = abs(dot(wi, ffnormal));
         if (pdf < scene_epsilon){
@@ -234,7 +284,7 @@ RT_PROGRAM void closest_hit_li()
         }
             
         if (prd_radiance.depth < max_depth) {
-            //float3 R = reflect(ray.direction, ffnormal);//TODO
+            //float3 R = reflect(ray.direction, ffnormal);
             Ray reflection_ray = make_Ray(hit_point, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
 
             PerRayData_radiance reflection_prd;
@@ -250,6 +300,79 @@ RT_PROGRAM void closest_hit_li()
 
     prd_radiance.result = color;
 }
+
+//RT_PROGRAM void closest_hit_li()
+//{
+//    float3 world_geo_normal = normalize(rtTransformNormal(RT_OBJECT_TO_WORLD, geometric_normal));
+//    float3 world_shade_normal = normalize(rtTransformNormal(RT_OBJECT_TO_WORLD, shading_normal));
+//    float3 ffnormal = faceforward(world_shade_normal, -ray.direction, world_geo_normal);
+//    float3 color = make_float3(0.0f);
+//    float3 hit_point = ray.origin + t_hit * ray.direction;
+//
+//    for (int depth = 0; depth < max_depth; depth++) {
+//        for (int i = 0; i < lights.size(); ++i) {
+//            BasicLight light = lights[i];
+//            float3 L = normalize(light.pos - hit_point);
+//
+//            //shadow ray
+//            PerRayData_shadow shadow_prd;
+//            shadow_prd.visibility = make_float3(1.0f);
+//            float Ldist = length(light.pos - hit_point);
+//            optix::Ray shadow_ray(hit_point, L, SHADOW_RAY_TYPE, scene_epsilon, Ldist);
+//            rtTrace(top_shadower, shadow_ray, shadow_prd);
+//            float3 light_visibility = shadow_prd.visibility;
+//            float3 wi = normalize(light.pos - hit_point);
+//
+//            //direct lighting
+//            if (fmaxf(light_visibility) > 0.0f) {
+//                float falloff_factor = 1.0f / (Ldist * Ldist);
+//                float3 Li = light.intensity_multiplier * falloff_factor * light.color;
+//                color += prd_radiance.importance * Li * linearblend_reflectivity_f(wi, -ray.direction, ffnormal) * max(0.0f, dot(wi, ffnormal));
+//            }
+//
+//            //emissive lighting
+//            color += prd_radiance.importance * Ke * Kd;
+//
+//            //indirect lighting
+//            float pdf = 1.0f;
+//            wi = make_float3(0.0f);
+//            float3 brdf = linearblend_samplewi(prd_radiance.seed, wi, -ray.direction, ffnormal, pdf);
+//            float cosine_term = abs(dot(wi, ffnormal));
+//            if (pdf < scene_epsilon) {
+//                prd_radiance.result = color;
+//                return;
+//            }
+//            float3 importance = prd_radiance.importance * (brdf * cosine_term) / pdf;
+//            if (importance.x == 0 &&
+//                importance.y == 0 &&
+//                importance.z == 0) {
+//                prd_radiance.result = color;
+//                return;
+//            }
+//
+//            if (prd_radiance.depth == 0)
+//            {
+//                prd_radiance.albedo = Kd;
+//                prd_radiance.normal = ffnormal;
+//            }
+//
+//            if (prd_radiance.depth < max_depth) {
+//                Ray reflection_ray = make_Ray(hit_point, wi, RADIANCE_RAY_TYPE, scene_epsilon, RT_DEFAULT_MAX);
+//
+//                PerRayData_radiance reflection_prd;
+//                reflection_prd.importance = importance;
+//                reflection_prd.result = color;
+//                reflection_prd.depth = prd_radiance.depth + 1;
+//                reflection_prd.seed = prd_radiance.seed;
+//                rtTrace(top_object, reflection_ray, reflection_prd);
+//                color += reflection_prd.result;
+//            }
+//
+//        }
+//    }
+//
+//    prd_radiance.result = color;
+//}
 
 RT_PROGRAM void shadow()
 {

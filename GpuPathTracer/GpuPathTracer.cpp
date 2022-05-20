@@ -44,7 +44,7 @@
 #  endif
 #endif
 #define USE_DEBUG_EXCEPTIONS true
-#define DL_DENOISER true
+#define DL_DENOISER false
 
 #include <optixu/optixpp_namespace.h>
 #include <optixu/optixu_math_stream_namespace.h>
@@ -89,14 +89,16 @@ int2           mouse_prev_pos;
 int            mouse_button;
 
 // Pathtracing
-int            max_depth = 3;
-int            frame_number = 1;
+int max_depth = 8;
+int frame_number = 1;
+bool recount = false;
 
 //postprocessing
 Buffer denoised_buffer;
 Buffer empty_buffer;
 Buffer training_data_buffer;
 
+PostprocessingStage tonemap_stage;
 PostprocessingStage denoise_stage;
 CommandList commandlist;
 bool initDenoiser = true;
@@ -139,6 +141,10 @@ void glutResize(int w, int h);
 Buffer getOutputBuffer()
 {
     return context["output_buffer"]->getBuffer();
+}
+Buffer getTonemappedBuffer()
+{
+    return context["tonemapped_buffer"]->getBuffer();
 }
 Buffer getAlbedoBuffer()
 {
@@ -194,7 +200,10 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     // Set up context
     context = Context::create();
     context->setRayTypeCount(2);
+    context->setStackSize(9280);
     context->setEntryPointCount(1);
+    context->setMaxTraceDepth(max_depth+2);
+    context->setMaxCallableProgramDepth(10);
     if (usage_report_level > 0)
     {
         context->setUsageReportCallback(usageReportCallback, usage_report_level, logger);
@@ -208,10 +217,16 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     denoised_buffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
     context["denoised_buffer"]->set(denoised_buffer);
 
+    // Accumulation buffer
+    Buffer accum_buffer = context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, width, height);
+    context["accum_buffer"]->set(accum_buffer);
+
 #if DL_DENOISER
     //TODO: not sure whether it's useful
-    empty_buffer = context->createBuffer(RT_BUFFER_OUTPUT, RT_FORMAT_FLOAT4, 0, 0); 
-    training_data_buffer = context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_BYTE, 0);
+    //empty_buffer = context->createBuffer(RT_BUFFER_OUTPUT, RT_FORMAT_FLOAT4, 0, 0); 
+    //training_data_buffer = context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_BYTE, 0);
+    Buffer tonemapped_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
+    context["tonemapped_buffer"]->set(tonemapped_buffer);
     Buffer albedo_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
     context["input_albedo_buffer"]->set(albedo_buffer);
     Buffer normal_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
@@ -356,6 +371,12 @@ void updateCamera()
 
     camera_rotate = Matrix4x4::identity();
 
+    if (recount)
+    {
+        frame_number = 1;
+        recount = false;
+    }
+
     context["frame_number"]->setUint(frame_number++);
     context["eye"]->setFloat(camera_eye);
     context["U"]->setFloat(camera_u);
@@ -413,13 +434,19 @@ void glutRun()
 
 void setupDenoiser()
 {
+    tonemap_stage = context->createBuiltinPostProcessingStage("TonemapperSimple");
     denoise_stage = context->createBuiltinPostProcessingStage("DLDenoiser");
-    if (training_data_buffer)
-    {
-        Variable training_buff = denoise_stage->declareVariable("training_data_buffer");
-        training_buff->set(training_data_buffer);
-    }
-    denoise_stage->declareVariable("input_buffer")->set(getOutputBuffer());
+    //if (training_data_buffer)
+    //{
+    //    Variable training_buff = denoise_stage->declareVariable("training_data_buffer");
+    //    training_buff->set(training_data_buffer);
+    //}
+    tonemap_stage->declareVariable("input_buffer")->set(getOutputBuffer());
+    tonemap_stage->declareVariable("output_buffer")->set(getTonemappedBuffer());
+    tonemap_stage->declareVariable("exposure")->setFloat(1.0f);
+    tonemap_stage->declareVariable("gamma")->setFloat(2.2f);
+    tonemap_stage->declareVariable("hdr")->setFloat(1);
+    denoise_stage->declareVariable("input_buffer")->set(getTonemappedBuffer());
     denoise_stage->declareVariable("output_buffer")->set(denoised_buffer);
     denoise_stage->declareVariable("hdr")->setUint(0);
     denoise_stage->declareVariable("blend")->setFloat(denoise_blend);
@@ -427,6 +454,7 @@ void setupDenoiser()
     denoise_stage->declareVariable("input_normal_buffer");
     commandlist = context->createCommandList();
     commandlist->appendLaunch(0, width, height);
+    commandlist->appendPostprocessingStage(tonemap_stage, width, height);
     commandlist->appendPostprocessingStage(denoise_stage, width, height);
     commandlist->finalize();
 
@@ -460,6 +488,10 @@ void glutDisplay()
         static unsigned frame_count = 0;
         sutil::displayFps(frame_count++);
     }
+
+    char str[64];
+    sprintf(str, "Accumulating frames #%d", frame_number);
+    sutil::displayText(str, 10, 55);
 
     glutSwapBuffers();
 }
@@ -512,6 +544,7 @@ void glutMouseMotion(int x, int y)
         const float dmax = fabsf(dx) > fabs(dy) ? dx : dy;
         const float scale = fminf(dmax, 0.9f);
         camera_eye = camera_eye + (camera_lookat - camera_eye) * scale;
+        recount = true;
     }
     else if (mouse_button == GLUT_LEFT_BUTTON)
     {
@@ -524,6 +557,7 @@ void glutMouseMotion(int x, int y)
         const float2 b = { to.x / width, to.y / height };
 
         camera_rotate = arcball.rotate(b, a);
+        recount = true;
     }
 
     mouse_prev_pos = make_int2(x, y);
@@ -533,7 +567,7 @@ void glutMouseMotion(int x, int y)
 void glutResize(int w, int h)
 {
     if (w == (int)width && h == (int)height) return;
-
+    recount = true;
     width = w;
     height = h;
     sutil::ensureMinimumSize(width, height);
