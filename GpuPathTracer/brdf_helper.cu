@@ -13,14 +13,13 @@
 //
 //////////////////////////////// //////////////////////////////// 
 
-//TODO: little difference with the CPU version ( ks, ka )
 rtDeclareVariable(float3, Kd, , );          // Diffuse
 rtDeclareVariable(float3, Ks, , );			// Specular
 rtDeclareVariable(float3, Kr, , );			// Reflective
 rtDeclareVariable(float3, Ka, , );			// Ambient
 rtDeclareVariable(float, phong_exp, , );	// phong_exp
 rtDeclareVariable(float, Pm, , );			// Metalness
-rtDeclareVariable(float, Pr, , );			// Shininess
+rtDeclareVariable(float, Pr, , );			// Shininess / Roughness
 rtDeclareVariable(float, Ps, , );			// Fresnel
 rtDeclareVariable(float3, Tf, , );			// Transparency
 rtDeclareVariable(float3, Ke, , );			// Emissive
@@ -91,6 +90,39 @@ RT_CALLABLE_PROGRAM float3 new_cosine_sample_hemisphere(unsigned int seed)
     return make_float3(sample_x, sample_y, z);
 }
 
+RT_CALLABLE_PROGRAM float blinn_d(const float& s, const float& n_dot_h)
+{
+	return (s + 2) / (2 * M_PIf) * powf(n_dot_h, s);
+}
+
+RT_CALLABLE_PROGRAM float beckmann_d(const float& s, const float& n_dot_h)
+{
+	float n_dot_h_2 = n_dot_h * n_dot_h;
+	return exp((n_dot_h_2 - 1) / (s * s * n_dot_h_2)) / (M_PIf * s * s * n_dot_h_2 * n_dot_h_2);
+}
+
+RT_CALLABLE_PROGRAM float ggx_d(const float& s, const float& n_dot_h)
+{
+	float a2 = s * s;
+	float d = ((n_dot_h * a2 - n_dot_h) * n_dot_h + 1);
+	return a2 / (d * d * M_PIf);
+}
+
+RT_CALLABLE_PROGRAM float blinn_g(const float& n_dot_h, const float& n_dot_o, const float& n_dot_i, const float& o_dot_h)
+{
+	float m1 = 2 * n_dot_h * n_dot_o / o_dot_h;
+	float m2 = 2 * n_dot_h * n_dot_i / o_dot_h;
+	return min(1.0f, min(m1, m2));
+}
+
+RT_CALLABLE_PROGRAM float smith_g(const float& n_dot_o, const float& n_dot_i, const float& s)
+{
+	float k = s * s / 2;
+	float g_o = n_dot_o / (n_dot_o * (1 - k) + k);
+	float g_i = n_dot_i / (n_dot_i * (1 - k) + k);
+	return g_o * g_i;
+}
+
 RT_CALLABLE_PROGRAM float3 diffuse_f(float3 wi, float3 wo, float3 n)
 {
 
@@ -103,7 +135,7 @@ RT_CALLABLE_PROGRAM float3 diffuse_f(float3 wi, float3 wo, float3 n)
 
 }
 
-RT_CALLABLE_PROGRAM float3 blinnphong_f(float3 wi, float3 wo, float3 n)
+RT_CALLABLE_PROGRAM float3 blinnphong_f(float3 wi, float3 wo, float3 n, float brdf_type = 1.f)
 {
 	float3 blinnphong_reflection_brdf;
 	float3 blinnphong_refraction_brdf;
@@ -114,19 +146,31 @@ RT_CALLABLE_PROGRAM float3 blinnphong_f(float3 wi, float3 wo, float3 n)
 		blinnphong_reflection_brdf = make_float3(0.0f);
 
 	float3 wh = normalize(wi + wo);
+	float n_dot_h = dot(n, wh);
+	float n_dot_o = dot(n, wo);
+	float n_dot_i = dot(n, wi);
+	float o_dot_h = dot(wo, wh);
 	float F = Ps + ((1.0f - Ps) * powf(1.0f - abs(dot(wh, wi)), 5.0f));
 	float s = Pr;
-	float D = (s + 2) / (2 * M_PIf) * powf(dot(n, wh), s);
-	float m1 = 2 * dot(n, wh) * dot(n, wo) / dot(wo, wh);
-	float m2 = 2 * dot(n, wh) * dot(n, wi) / dot(wo, wh);
-	float G = min(1.0f, min(m1, m2));
-	blinnphong_reflection_brdf = make_float3(F * D * G / (4 * dot(n, wo) * dot(n, wi)));
-	blinnphong_refraction_brdf = make_float3(1.0f - F) * diffuse_f(wi, wo, n); // TODO: little difference
+	float D = 0.0f;
+	float G = 0.0f;
+	if (brdf_type == 1.f) { // Cook-Torrance
+		D = blinn_d(s, n_dot_h);
+		G = blinn_g(n_dot_h, n_dot_o, n_dot_i, o_dot_h);
+	} else if (brdf_type == 2.f) {// GGX
+		D = ggx_d(s, n_dot_h);
+		G = smith_g(n_dot_o, n_dot_i, s);
+	} else if (brdf_type == 3.f) {// Beckmann
+		D = beckmann_d(s, n_dot_h);
+		G = smith_g(n_dot_o, n_dot_i, s);
+	}
+	blinnphong_reflection_brdf = make_float3(F * D * G / (4 * n_dot_o * n_dot_i));
+	blinnphong_refraction_brdf = make_float3(1.0f - F) * diffuse_f(wi, wo, n);
 	blinnphong_brdf = blinnphong_reflection_brdf + blinnphong_refraction_brdf;
 	return blinnphong_brdf;
 }
 
-RT_CALLABLE_PROGRAM float3 blinnphongmetal_f(float3 wi, float3 wo, float3 n)
+RT_CALLABLE_PROGRAM float3 blinnphongmetal_f(float3 wi, float3 wo, float3 n, float brdf_type = 1.f)
 {
 	float3 blinnphong_reflection_brdf;
 	float3 blinnphong_refraction_brdf;
@@ -137,30 +181,43 @@ RT_CALLABLE_PROGRAM float3 blinnphongmetal_f(float3 wi, float3 wo, float3 n)
 		blinnphong_reflection_brdf = make_float3(0.0f);
 
 	float3 wh = normalize(wi + wo);
+	float n_dot_h = dot(n, wh);
+	float n_dot_o = dot(n, wo);
+	float n_dot_i = dot(n, wi);
+	float o_dot_h = dot(wo, wh);
 	float F = Ps + ((1.0f - Ps) * powf(1.0f - abs(dot(wh, wi)), 5.0f));
 	float s = Pr;
-	float D = (s + 2) / (2 * M_PIf) * powf(dot(n, wh), s);
-	float m1 = 2 * dot(n, wh) * dot(n, wo) / dot(wo, wh);
-	float m2 = 2 * dot(n, wh) * dot(n, wi) / dot(wo, wh);
-	float G = min(1.0f, min(m1, m2));
-	blinnphong_reflection_brdf = F * D * G / (4 * dot(n, wo) * dot(n, wi)) * Kd;
+	float D = 0.0f;
+	float G = 0.0f;
+	if (brdf_type == 1.f) { // Cook-Torrance
+		D = blinn_d(s, n_dot_h);
+		G = blinn_g(n_dot_h, n_dot_o, n_dot_i, o_dot_h);
+	}
+	else if (brdf_type == 2.f) {// GGX
+		D = ggx_d(s, n_dot_h);
+		G = smith_g(n_dot_o, n_dot_i, s);
+	}
+	else if (brdf_type == 3.f) {// Beckmann
+		D = beckmann_d(s, n_dot_h);
+		G = smith_g(n_dot_o, n_dot_i, s);
+	}
+	blinnphong_reflection_brdf = F * D * G / (4 * n_dot_o * n_dot_i) * Kd;
 	blinnphong_refraction_brdf = make_float3(0.0f);
 	blinnphong_brdf = blinnphong_reflection_brdf + blinnphong_refraction_brdf;
 	return blinnphong_brdf;
 }
 
 // linear blend brdf between reflective and metalness blinn phong
-RT_CALLABLE_PROGRAM float3 linearblend_metal_f(float3 wi, float3 wo, float3 n)
+RT_CALLABLE_PROGRAM float3 linearblend_metal_f(float3 wi, float3 wo, float3 n, float brdf_type = 1.f)
 {
-	float3 metal_blend = Pm * blinnphongmetal_f(wi, wo, n) + (1.0f -Pm) * blinnphong_f(wi, wo, n);
+	float3 metal_blend = Pm * blinnphongmetal_f(wi, wo, n, brdf_type) + (1.0f -Pm) * blinnphong_f(wi, wo, n, brdf_type);
 	return metal_blend;
 }
 
-RT_CALLABLE_PROGRAM float3 linearblend_reflectivity_f(float3 wi, float3 wo, float3 n)
+RT_CALLABLE_PROGRAM float3 linearblend_reflectivity_f(float3 wi, float3 wo, float3 n, float brdf_type = 1.f)
 {
-	float3 metal_blend = Pm * blinnphongmetal_f(wi, wo, n) + (1.0f - Pm) * blinnphong_f(wi, wo, n);
-	//float3 reflectivity_blend = Kr * metal_blend + (1.0f - Kr) * diffuse_f(wi, wo, n);
-	float3 reflectivity_blend = Ks * metal_blend + (1.0f - Ks) * diffuse_f(wi, wo, n); //TODO
+	float3 metal_blend = Pm * blinnphongmetal_f(wi, wo, n, brdf_type) + (1.0f - Pm) * blinnphong_f(wi, wo, n, brdf_type);
+	float3 reflectivity_blend = Ks * metal_blend + (1.0f - Ks) * diffuse_f(wi, wo, n);
 	return reflectivity_blend;
 }
 

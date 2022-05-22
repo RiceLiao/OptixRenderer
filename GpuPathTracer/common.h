@@ -31,6 +31,10 @@
 // Common optix::Ray types
 #define RADIANCE_RAY_TYPE 0
 #define SHADOW_RAY_TYPE 1
+// 0 - no denoiser, 1 - multisampling, 2 - dl denoiser, 3 - accumulation
+#define DENOISER_TYPE 0
+#define BRDF_COMPARISON true
+#define NUMBER_OF_SAMPLES 4
 
 #include <optixu/optixu_vector_types.h>
 

@@ -44,7 +44,6 @@
 #  endif
 #endif
 #define USE_DEBUG_EXCEPTIONS true
-#define DL_DENOISER false
 
 #include <optixu/optixpp_namespace.h>
 #include <optixu/optixu_math_stream_namespace.h>
@@ -118,7 +117,7 @@ Buffer getNormalBuffer();
 void destroyContext();
 void registerExitHandler();
 void createContext(int usage_report_level, UsageReportLogger* logger);
-void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions);
+void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions, std::vector<int> mesh_brdf_types);
 void setupCamera();
 void setupLights();
 void updateCamera();
@@ -221,8 +220,7 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     Buffer accum_buffer = context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, width, height);
     context["accum_buffer"]->set(accum_buffer);
 
-#if DL_DENOISER
-    //TODO: not sure whether it's useful
+#if DENOISER_TYPE == 2
     //empty_buffer = context->createBuffer(RT_BUFFER_OUTPUT, RT_FORMAT_FLOAT4, 0, 0); 
     //training_data_buffer = context->createBuffer(RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_BYTE, 0);
     Buffer tonemapped_buffer = sutil::createInputOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
@@ -257,7 +255,7 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
 #endif
 }
 
-void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions)
+void loadMeshes(std::vector<std::string> filenames, std::vector<float3> positions, std::vector<int> brdf_types)
 {
     GeometryGroup geometry_group;
     geometry_group = context->createGeometryGroup();
@@ -267,17 +265,9 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
     const char* ptx = sutil::getPtxString(SAMPLE_NAME, "pinhole_camera.cu");
     Program any_hit = context->createProgramFromPTXString(ptx, "shadow");
     Program closest_hit = context->createProgramFromPTXString(ptx, "closest_hit_li");
-
-    // Setup closest and any hit programs for our meshes
-    //const char* ptx = sutil::getPtxString(SAMPLE_NAME, "pathtracer.cu");
-    //const char* ptx2 = sutil::getPtxString(SAMPLE_NAME, "triangle_mesh.cu");
-    //Program closest_hit = context->createProgramFromPTXString(ptx, "closest_hit_li");
-    //Program any_hit = context->createProgramFromPTXString(ptx, "shadow");
-
-    //// Intersection and out of bounds program for our meshes
-    //Program intersection = context->createProgramFromPTXString(ptx2, "mesh_intersect");
-    //Program bounds = context->createProgramFromPTXString(ptx2, "mesh_bounds");
-
+    Program closest_hit_cook = context->createProgramFromPTXString(ptx, "closest_hit_li_cook");
+    Program closest_hit_ggx = context->createProgramFromPTXString(ptx, "closest_hit_li_ggx");
+    Program closest_hit_beckmann = context->createProgramFromPTXString(ptx, "closest_hit_li_beckmann");
 
     for (int i = 0; i < filenames.size(); ++i)
     {
@@ -286,12 +276,17 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
         mesh.use_tri_api = use_tri_api;
         mesh.ignore_mats = ignore_mats;
 
-
         // Change default programs
         mesh.closest_hit = closest_hit;
+        if(brdf_types[i] == 1)
+            mesh.closest_hit = closest_hit_cook;
+        else if (brdf_types[i] == 2)
+            mesh.closest_hit = closest_hit_ggx;
+        else if (brdf_types[i] == 3)
+            mesh.closest_hit = closest_hit_beckmann;
         mesh.any_hit = any_hit;
-        //omesh.bounds = bounds;
-        //omesh.intersection = intersection;
+        //mesh.bounds = bounds;
+        //mesh.intersection = intersection;
 
         // Optix loads our mesh
         loadMesh(filenames[i], mesh, Matrix4x4::translate(positions[i]));
@@ -472,7 +467,7 @@ void glutDisplay()
     updateCamera();
     context->launch(0, width, height);
 
-#if DL_DENOISER
+#if DENOISER_TYPE == 2
     if (initDenoiser)
     {
         setupDenoiser();
@@ -488,10 +483,11 @@ void glutDisplay()
         static unsigned frame_count = 0;
         sutil::displayFps(frame_count++);
     }
-
+#if DENOISER_TYPE == 3
     char str[64];
     sprintf(str, "Accumulating frames #%d", frame_number);
     sutil::displayText(str, 10, 55);
+#endif
 
     glutSwapBuffers();
 }
@@ -611,6 +607,61 @@ void printUsageAndExit(const std::string& argv0)
 int main(int argc, char** argv)
 {
     std::string out_file;
+#if BRDF_COMPARISON 
+    std::vector<std::string> mesh_filenames =
+    {
+        // Cook Torrance
+        std::string(sutil::samplesDir()) + "/scenes/sphere.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere1.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere2.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere3.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere4.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere5.obj",
+        // GGX
+        std::string(sutil::samplesDir()) + "/scenes/sphere.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere1.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere2.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere3.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere4.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere5.obj",
+        // Beckmann
+        std::string(sutil::samplesDir()) + "/scenes/sphere.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere1.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere2.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere3.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere4.obj",
+        std::string(sutil::samplesDir()) + "/scenes/sphere5.obj",
+    };
+    std::vector<float3> mesh_positions =
+    {
+        make_float3(0.0f, 0.0f, 0.0f),
+        make_float3(5.0f, 0.0f, 0.0f),
+        make_float3(10.0f, 0.0f, 0.0f),
+        make_float3(15.0f, 0.0f, 0.0f),
+        make_float3(20.0f, 0.0f, 0.0f),
+        make_float3(25.0f, 0.0f, 0.0f),
+
+        make_float3(0.0f, 5.0f, 0.0f),
+        make_float3(5.0f, 5.0f, 0.0f),
+        make_float3(10.0f, 5.0f, 0.0f),
+        make_float3(15.0f, 5.0f, 0.0f),
+        make_float3(20.0f, 5.0f, 0.0f),
+        make_float3(25.0f, 5.0f, 0.0f),
+
+        make_float3(0.0f, 10.0f, 0.0f),
+        make_float3(5.0f, 10.0f, 0.0f),
+        make_float3(10.0f, 10.0f, 0.0f),
+        make_float3(15.0f, 10.0f, 0.0f),
+        make_float3(20.0f, 10.0f, 0.0f),
+        make_float3(25.0f, 10.0f, 0.0f),
+    };
+    std::vector<int> mesh_brdf_types =
+    {
+        1, 1, 1, 1, 1, 1,
+        2, 2, 2, 2, 2, 2,
+        3, 3, 3, 3, 3, 3,
+    };
+#else
     std::vector<std::string> mesh_filenames =
     {
         std::string(sutil::samplesDir()) + "/scenes/NewShip.obj",
@@ -621,6 +672,11 @@ int main(int argc, char** argv)
         make_float3(0.0f, 10.0f, 0.0f),
         make_float3(0.0f, 0.0f, 0.0f),
     };
+    std::vector<int> mesh_brdf_types =
+    {
+        0, 0,
+    };
+#endif
     int usage_report_level = 0;
 
     try
@@ -633,7 +689,7 @@ int main(int argc, char** argv)
 
         UsageReportLogger logger;
         createContext(usage_report_level, &logger);
-        loadMeshes(mesh_filenames, mesh_positions);
+        loadMeshes(mesh_filenames, mesh_positions, mesh_brdf_types);
         setupCamera();
         setupLights();
 
