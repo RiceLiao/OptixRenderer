@@ -31,9 +31,10 @@
 // Common optix::Ray types
 #define RADIANCE_RAY_TYPE 0
 #define SHADOW_RAY_TYPE 1
-// 0 - no denoiser, 1 - multisampling, 2 - dl denoiser, 3 - accumulation
-#define DENOISER_TYPE 0
-#define BRDF_COMPARISON true
+#define DENOISER_TYPE 3 // 0 - no denoiser, 1 - multisampling, 2 - dl denoiser, 3 - accumulation
+#define SCENES 0 // 0 - main scene, 1 - brdf comparison, 2 - other
+#define POINT_LIGHT false
+#define AREA_LIGHT true
 #define NUMBER_OF_SAMPLES 4
 
 #include <optixu/optixu_vector_types.h>
@@ -47,6 +48,14 @@ struct BasicLight
   float3 color;
   int    casts_shadow; 
   float intensity_multiplier;
+};
+
+struct ParallelogramLight
+{
+    optix::float3 corner;
+    optix::float3 v1, v2;
+    optix::float3 normal;
+    optix::float3 emission;
 };
 
 

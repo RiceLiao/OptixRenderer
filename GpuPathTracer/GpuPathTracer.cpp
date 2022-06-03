@@ -88,7 +88,7 @@ int2           mouse_prev_pos;
 int            mouse_button;
 
 // Pathtracing
-int max_depth = 8;
+int max_depth = 10;
 int frame_number = 1;
 bool recount = false;
 
@@ -216,6 +216,19 @@ void createContext(int usage_report_level, UsageReportLogger* logger)
     denoised_buffer = sutil::createOutputBuffer(context, RT_FORMAT_FLOAT4, width, height, use_pbo);
     context["denoised_buffer"]->set(denoised_buffer);
 
+    //TextureSampler tex_sampler = context->createTextureSampler();
+    //tex_sampler->setWrapMode(0, RT_WRAP_CLAMP_TO_EDGE);
+    //tex_sampler->setWrapMode(1, RT_WRAP_CLAMP_TO_EDGE);
+    //tex_sampler->setFilteringModes(RT_FILTER_LINEAR, RT_FILTER_LINEAR, RT_FILTER_NONE);
+    //tex_sampler->setIndexingMode(RT_TEXTURE_INDEX_NORMALIZED_COORDINATES);
+    //tex_sampler->setReadMode(RT_TEXTURE_READ_NORMALIZED_FLOAT);
+    //tex_sampler->setMaxAnisotropy(1.0f);
+    //tex_sampler->setBuffer(0, 0, tex_buffer);
+    //load box texture
+    //const float3 box_default_color = make_float3(1.0f, 0.0f, 0.0f);
+    //const std::string box_texpath = std::string(sutil::samplesDir()) + "/scenes/wood-chest-photoscan-pbr/source/chest_basecolor.jpg";
+    //context["box_texture"]->setTextureSampler(sutil::loadTexture(context, box_texpath, box_default_color));
+
     // Accumulation buffer
     Buffer accum_buffer = context->createBuffer(RT_BUFFER_INPUT_OUTPUT | RT_BUFFER_GPU_LOCAL, RT_FORMAT_FLOAT4, width, height);
     context["accum_buffer"]->set(accum_buffer);
@@ -268,6 +281,7 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
     Program closest_hit_cook = context->createProgramFromPTXString(ptx, "closest_hit_li_cook");
     Program closest_hit_ggx = context->createProgramFromPTXString(ptx, "closest_hit_li_ggx");
     Program closest_hit_beckmann = context->createProgramFromPTXString(ptx, "closest_hit_li_beckmann");
+    Program closest_hit_other = context->createProgramFromPTXString(ptx, "closest_hit_other");
 
     for (int i = 0; i < filenames.size(); ++i)
     {
@@ -284,6 +298,8 @@ void loadMeshes(std::vector<std::string> filenames, std::vector<float3> position
             mesh.closest_hit = closest_hit_ggx;
         else if (brdf_types[i] == 3)
             mesh.closest_hit = closest_hit_beckmann;
+        else if (brdf_types[i] == 9)
+            mesh.closest_hit = closest_hit_other;
         mesh.any_hit = any_hit;
         //mesh.bounds = bounds;
         //mesh.intersection = intersection;
@@ -324,15 +340,29 @@ void setupLights()
         { make_float3(10.0f,  40.0f ,  10.0f), make_float3(1.0f, 1.0f, 1.0f), 1, 2500.0f }
     };
     //lights[0].pos *= max_dim;
-
     Buffer light_buffer = context->createBuffer(RT_BUFFER_INPUT);
     light_buffer->setFormat(RT_FORMAT_USER);
     light_buffer->setElementSize(sizeof(BasicLight));
     light_buffer->setSize(sizeof(lights) / sizeof(lights[0]));
     memcpy(light_buffer->map(), lights, sizeof(lights));
     light_buffer->unmap();
-
     context["lights"]->set(light_buffer);
+
+    ParallelogramLight plight;
+    plight.corner = make_float3(40, 40, 30);
+    plight.v1 = make_float3(-30.0f, 0.0f, 0.0f);
+    plight.v2 = make_float3(0.0f, 0.0f, 20.0f);
+    plight.normal = normalize(cross(plight.v1, plight.v2));
+    plight.emission = make_float3(15.0f, 15.0f, 5.0f);
+
+    Buffer plight_buffer = context->createBuffer(RT_BUFFER_INPUT);
+    plight_buffer->setFormat(RT_FORMAT_USER);
+    plight_buffer->setElementSize(sizeof(ParallelogramLight));
+    plight_buffer->setSize(1u);
+    memcpy(plight_buffer->map(), &plight, sizeof(plight));
+    plight_buffer->unmap();
+    context["plights"]->setBuffer(plight_buffer);
+
 }
 
 
@@ -607,7 +637,7 @@ void printUsageAndExit(const std::string& argv0)
 int main(int argc, char** argv)
 {
     std::string out_file;
-#if BRDF_COMPARISON 
+#if SCENES == 1 
     std::vector<std::string> mesh_filenames =
     {
         // Cook Torrance
@@ -635,25 +665,25 @@ int main(int argc, char** argv)
     std::vector<float3> mesh_positions =
     {
         make_float3(0.0f, 0.0f, 0.0f),
+        make_float3(0.0f, 0.0f, 5.0f),
+        make_float3(0.0f, 0.0f, 10.0f),
+        make_float3(0.0f, 0.0f, 15.0f),
+        make_float3(0.0f, 0.0f, 20.0f),
+        make_float3(0.0f, 0.0f, 25.0f),
+
         make_float3(5.0f, 0.0f, 0.0f),
+        make_float3(5.0f, 0.0f, 5.0f),
+        make_float3(5.0f, 0.0f, 10.0f),
+        make_float3(5.0f, 0.0f, 15.0f),
+        make_float3(5.0f, 0.0f, 20.0f),
+        make_float3(5.0f, 0.0f, 25.0f),
+
         make_float3(10.0f, 0.0f, 0.0f),
-        make_float3(15.0f, 0.0f, 0.0f),
-        make_float3(20.0f, 0.0f, 0.0f),
-        make_float3(25.0f, 0.0f, 0.0f),
-
-        make_float3(0.0f, 5.0f, 0.0f),
-        make_float3(5.0f, 5.0f, 0.0f),
-        make_float3(10.0f, 5.0f, 0.0f),
-        make_float3(15.0f, 5.0f, 0.0f),
-        make_float3(20.0f, 5.0f, 0.0f),
-        make_float3(25.0f, 5.0f, 0.0f),
-
-        make_float3(0.0f, 10.0f, 0.0f),
-        make_float3(5.0f, 10.0f, 0.0f),
-        make_float3(10.0f, 10.0f, 0.0f),
-        make_float3(15.0f, 10.0f, 0.0f),
-        make_float3(20.0f, 10.0f, 0.0f),
-        make_float3(25.0f, 10.0f, 0.0f),
+        make_float3(10.0f, 0.0f, 5.0f),
+        make_float3(10.0f, 0.0f, 10.0f),
+        make_float3(10.0f, 0.0f, 15.0f),
+        make_float3(10.0f, 0.0f, 20.0f),
+        make_float3(10.0f, 0.0f, 25.0f),
     };
     std::vector<int> mesh_brdf_types =
     {
@@ -661,7 +691,7 @@ int main(int argc, char** argv)
         2, 2, 2, 2, 2, 2,
         3, 3, 3, 3, 3, 3,
     };
-#else
+#elif SCENES == 0
     std::vector<std::string> mesh_filenames =
     {
         std::string(sutil::samplesDir()) + "/scenes/NewShip.obj",
@@ -675,6 +705,19 @@ int main(int argc, char** argv)
     std::vector<int> mesh_brdf_types =
     {
         0, 0,
+    };
+#elif SCENES == 2
+    std::vector<std::string> mesh_filenames =
+    {
+        std::string(sutil::samplesDir()) + "/scenes/fish/02_02_position2.obj",
+    };
+    std::vector<float3> mesh_positions =
+    {
+        make_float3(0.0f, 10.0f, 0.0f),
+    };
+    std::vector<int> mesh_brdf_types =
+    {
+        9,
     };
 #endif
     int usage_report_level = 0;

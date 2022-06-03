@@ -164,7 +164,13 @@ RT_CALLABLE_PROGRAM float3 blinnphong_f(float3 wi, float3 wo, float3 n, float br
 		D = beckmann_d(s, n_dot_h);
 		G = smith_g(n_dot_o, n_dot_i, s);
 	}
-	blinnphong_reflection_brdf = make_float3(F * D * G / (4 * n_dot_o * n_dot_i));
+	if (brdf_type == 2.f) {
+		blinnphong_reflection_brdf = make_float3(F * D * G / (4 * n_dot_o));
+	}
+	else{
+		blinnphong_reflection_brdf = make_float3(F * D * G / (4 * n_dot_o * n_dot_i));
+	}
+		
 	blinnphong_refraction_brdf = make_float3(1.0f - F) * diffuse_f(wi, wo, n);
 	blinnphong_brdf = blinnphong_reflection_brdf + blinnphong_refraction_brdf;
 	return blinnphong_brdf;
@@ -200,6 +206,12 @@ RT_CALLABLE_PROGRAM float3 blinnphongmetal_f(float3 wi, float3 wo, float3 n, flo
 	else if (brdf_type == 3.f) {// Beckmann
 		D = beckmann_d(s, n_dot_h);
 		G = smith_g(n_dot_o, n_dot_i, s);
+	}
+	if (brdf_type == 2.f) {
+		blinnphong_reflection_brdf = F * D * G / (4 * n_dot_o) * Kd;
+	}
+	else {
+		blinnphong_reflection_brdf = F * D * G / (4 * n_dot_o * n_dot_i) * Kd;
 	}
 	blinnphong_reflection_brdf = F * D * G / (4 * n_dot_o * n_dot_i) * Kd;
 	blinnphong_refraction_brdf = make_float3(0.0f);
