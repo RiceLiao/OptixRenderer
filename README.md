@@ -1,5 +1,5 @@
 # OptixRenderer
-OptixRenderer is a renderer based on Nvidia Optix 6.5. It includes three scenarios which separately show the main feature, refraction and different Normal Distribution function(D term) and Geometry Function(G) term of BRDF
+OptixRenderer is a renderer based on Nvidia Optix 6.5. It includes three scenarios which separately show the main feature, refraction and different Normal Distribution function(D term) and Geometry Function(G term) of BRDF
 
 ## List of Features
 ### Integrators
